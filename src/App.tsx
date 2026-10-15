@@ -14,6 +14,11 @@ import {
   saveSettings, 
   subscribeToRealtimeOrders 
 } from './lib/storage';
+import { 
+  fetchSharedSettings, 
+  saveSharedSettings, 
+  subscribeToSharedSettings 
+} from './lib/shopSettings';
 import { Navbar } from './components/Navbar';
 import { FinancialMetrics } from './components/FinancialMetrics';
 import { CategoryFilter } from './components/CategoryFilter';
@@ -82,29 +87,52 @@ export const App: React.FC = () => {
     }
   }, []);
 
+  // Carrega nome da loja e técnicos compartilhados (Supabase)
+  const loadSharedSettings = useCallback(async () => {
+    const shared = await fetchSharedSettings();
+    if (!shared) return;
+    setSettings((prev) => {
+      const technicians = shared.technicians.length > 0 ? shared.technicians : prev.technicians;
+      const active_technician = technicians.includes(prev.active_technician)
+        ? prev.active_technician
+        : technicians[0];
+      return { ...prev, shop_name: shared.shop_name, technicians, active_technician };
+    });
+  }, []);
+
   useEffect(() => {
     loadData();
+    loadSharedSettings();
 
     // Sincronização em tempo real quando Supabase estiver ativo
     const unsubscribe = subscribeToRealtimeOrders(() => {
       loadData(true);
     });
 
+    const unsubscribeSettings = subscribeToSharedSettings(() => {
+      loadSharedSettings();
+    });
+
     // Sincroniza sempre que a janela ou o celular ganha foco (ao trocar de aba/desbloquear tela)
-    const handleFocus = () => loadData(true);
+    const handleFocus = () => {
+      loadData(true);
+      loadSharedSettings();
+    };
     window.addEventListener('focus', handleFocus);
 
     // Polling suave a cada 12 segundos para manter PC e Celular na mesma rede sincronizados
     const interval = setInterval(() => {
       loadData(true);
+      loadSharedSettings();
     }, 12000);
 
     return () => {
       unsubscribe();
+      unsubscribeSettings();
       window.removeEventListener('focus', handleFocus);
       clearInterval(interval);
     };
-  }, [loadData]);
+  }, [loadData, loadSharedSettings]);
 
   // Handle Quick Status Change
   const handleUpdateStatus = async (id: string, newStatus: OSStatus) => {
@@ -184,13 +212,21 @@ export const App: React.FC = () => {
   };
 
   // Handle Settings Update
-  const handleSaveSettings = (newSettings: ShopSettings) => {
+  const handleSaveSettings = async (newSettings: ShopSettings) => {
     setSettings(newSettings);
     saveSettings(newSettings);
     if (!newSettings.pin_required) {
       setIsLocked(false);
     }
-    showToast('Configurações salvas e aplicadas!', 'success');
+    const { error } = await saveSharedSettings({
+      shop_name: newSettings.shop_name,
+      technicians: newSettings.technicians,
+    });
+    if (error) {
+      showToast(`Salvo só neste aparelho. Erro na nuvem: ${error}`, 'warning');
+    } else {
+      showToast('Configurações salvas e aplicadas em todos os aparelhos!', 'success');
+    }
   };
 
   const handleSelectTechnician = (tech: string) => {
@@ -438,13 +474,15 @@ export const App: React.FC = () => {
       />
 
       {/* Settings Modal (Supabase & Shop Setup) */}
-      <SettingsModal
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        settings={settings}
-        onSaveSettings={handleSaveSettings}
-        onRefreshData={() => loadData(true)}
-      />
+      {isSettingsOpen && (
+        <SettingsModal
+          isOpen={isSettingsOpen}
+          onClose={() => setIsSettingsOpen(false)}
+          settings={settings}
+          onSaveSettings={handleSaveSettings}
+          onRefreshData={() => loadData(true)}
+        />
+      )}
 
     </div>
   );

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   X, 
   Smartphone, 
@@ -11,10 +11,13 @@ import {
   Key, 
   Package, 
   CheckCircle2, 
-  TrendingUp 
+  TrendingUp,
+  Plus,
+  BadgeCheck
 } from 'lucide-react';
 import type { Order, DeviceType, OSStatus } from '../types';
 import { formatCurrency } from '../utils/formatters';
+import { fetchParts, type Part } from '../lib/parts';
 
 interface OrderModalProps {
   isOpen: boolean;
@@ -27,6 +30,15 @@ interface OrderModalProps {
 
 const COMMON_PHONE_BRANDS = ['Apple', 'Samsung', 'Xiaomi', 'Motorola', 'Realme', 'Asus'];
 const COMMON_CONSOLE_BRANDS = ['Sony', 'Microsoft', 'Nintendo', 'Valve'];
+
+// Normaliza texto para comparar modelos: minúsculas, sem acento, só letras/números separados por espaço
+const normText = (s: string) =>
+  (s || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
 
 export const OrderModal: React.FC<OrderModalProps> = ({
   isOpen,
@@ -51,8 +63,77 @@ export const OrderModal: React.FC<OrderModalProps> = ({
   const [devicePassword, setDevicePassword] = useState('');
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
+  const [parts, setParts] = useState<Part[]>([]);
+  const [usedParts, setUsedParts] = useState<Part[]>([]);
+
+  // Carrega as peças cadastradas sempre que o modal abre
+  useEffect(() => {
+    if (!isOpen) return;
+    let active = true;
+    fetchParts().then((res) => {
+      if (active) setParts(res.parts);
+    });
+    return () => {
+      active = false;
+    };
+  }, [isOpen]);
+
+  // Peças cadastradas que combinam com o modelo digitado
+  const suggestions = useMemo(() => {
+    const typed = normText(deviceModel);
+    if (typed.length < 3) return [];
+    const withBrand = normText(`${deviceBrand} ${deviceModel}`);
+    const list: { part: Part; exact: boolean }[] = [];
+    parts.forEach((p) => {
+      const pm = normText(p.model);
+      if (!pm) return;
+      const exact = pm === typed || pm === withBrand;
+      const loose =
+        exact ||
+        pm.includes(typed) ||
+        ` ${typed} `.includes(` ${pm} `) ||
+        ` ${withBrand} `.includes(` ${pm} `);
+      if (loose) list.push({ part: p, exact });
+    });
+    list.sort(
+      (a, b) =>
+        Number(b.exact) - Number(a.exact) ||
+        a.part.part.localeCompare(b.part.part) ||
+        a.part.price - b.part.price
+    );
+    return list;
+  }, [parts, deviceModel, deviceBrand]);
+
+  const cheapestIds = useMemo(() => {
+    const groups = new Map<string, Part[]>();
+    suggestions.forEach(({ part }) => {
+      const key = `${normText(part.model)}|${normText(part.part)}|${normText(part.description)}`;
+      groups.set(key, [...(groups.get(key) || []), part]);
+    });
+    const ids = new Set<string>();
+    groups.forEach((list) => {
+      if (list.length < 2) return;
+      const min = Math.min(...list.map((p) => p.price));
+      list.filter((p) => p.price === min).forEach((p) => ids.add(p.id));
+    });
+    return ids;
+  }, [suggestions]);
+
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+
+  const addPart = (p: Part) => {
+    setUsedParts((prev) => [...prev, p]);
+    setCostParts((prev) => round2((Number(prev) || 0) + p.price));
+  };
+
+  const removeUsedPart = (index: number) => {
+    const p = usedParts[index];
+    setUsedParts((prev) => prev.filter((_, i) => i !== index));
+    setCostParts((prev) => Math.max(0, round2((Number(prev) || 0) - p.price)));
+  };
 
   useEffect(() => {
+    setUsedParts([]);
     if (orderToEdit) {
       setDeviceType(orderToEdit.device_type);
       setDeviceBrand(orderToEdit.device_brand);
@@ -250,6 +331,76 @@ export const OrderModal: React.FC<OrderModalProps> = ({
               </div>
             </div>
           </div>
+
+          {/* Peças cadastradas para o modelo digitado */}
+          {(suggestions.length > 0 || usedParts.length > 0) && (
+            <div className="p-3 rounded-2xl bg-slate-950/60 border border-cyan-500/30">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-bold uppercase tracking-wider text-cyan-300 flex items-center gap-1.5">
+                  <Package className="w-4 h-4" /> Peças cadastradas para este modelo
+                </span>
+                <span className="text-[11px] text-slate-500">{suggestions.length} encontrada(s)</span>
+              </div>
+
+              {usedParts.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {usedParts.map((p, i) => (
+                    <span
+                      key={`${p.id}-${i}`}
+                      className="inline-flex items-center gap-1.5 text-[11px] bg-emerald-500/15 border border-emerald-500/40 text-emerald-200 px-2 py-1 rounded-lg"
+                    >
+                      {p.part}{p.description ? ` ${p.description}` : ''} · {p.supplier} · {formatCurrency(p.price)}
+                      <button
+                        type="button"
+                        onClick={() => removeUsedPart(i)}
+                        title="Remover do custo"
+                        className="text-emerald-300 hover:text-white"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                {suggestions.map(({ part: p, exact }) => (
+                  <div
+                    key={p.id}
+                    className="flex items-center justify-between gap-2 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2"
+                  >
+                    <div className="min-w-0">
+                      <div className="text-xs text-slate-200 font-medium truncate">
+                        {p.part}{p.description ? ` · ${p.description}` : ''}
+                      </div>
+                      <div className="text-[11px] text-slate-500 truncate">
+                        {p.supplier}{!exact ? ` · modelo: ${p.model}` : ''}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {cheapestIds.has(p.id) && (
+                        <span className="hidden sm:inline-flex items-center gap-1 text-[10px] text-cyan-300 bg-cyan-500/10 border border-cyan-500/30 px-1.5 py-0.5 rounded-full">
+                          <BadgeCheck className="w-3 h-3" /> menor preço
+                        </span>
+                      )}
+                      <span className="text-xs font-bold text-emerald-300">{formatCurrency(p.price)}</span>
+                      <button
+                        type="button"
+                        onClick={() => addPart(p)}
+                        title="Somar ao custo das peças"
+                        className="flex items-center gap-1 px-2 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-medium"
+                      >
+                        <Plus className="w-3 h-3" /> Usar
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[11px] text-slate-500 mt-2">
+                "Usar" soma o valor da peça no campo Custo das Peças, mais abaixo.
+              </p>
+            </div>
+          )}
 
           {/* Dados do Cliente */}
           <div className="pt-2 border-t border-slate-800">

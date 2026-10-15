@@ -4,6 +4,31 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 let cachedClient: SupabaseClient | null = null;
 let lastUsedConfig = '';
 
+/**
+ * Normaliza a URL do Supabase para o formato correto https://<project-id>.supabase.co
+ * Corrige automaticamente quando o usuário cola o link do painel (dashboard/project/...)
+ */
+export function normalizeSupabaseUrl(inputUrl: string): string {
+  let url = (inputUrl || '').trim();
+  if (!url) return '';
+
+  // Se o usuário colou o link do painel do Supabase
+  // Ex: https://supabase.com/dashboard/project/wdppbyttpwjllggfrwes ou similar
+  const dashboardMatch = url.match(/dashboard\/project\/([a-z0-9_-]+)/i);
+  if (dashboardMatch && dashboardMatch[1]) {
+    return `https://${dashboardMatch[1]}.supabase.co`;
+  }
+
+  // Se veio com /rest/v1 ou caminhos extras, pega somente o protocolo e host
+  try {
+    const withProto = url.startsWith('http://') || url.startsWith('https://') ? url : `https://${url}`;
+    const parsed = new URL(withProto);
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return url.replace(/\/+$/, '');
+  }
+}
+
 export function getSupabaseConfig(): { url: string; key: string } {
   const envUrl = import.meta.env.VITE_SUPABASE_URL || '';
   const envKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
@@ -11,26 +36,31 @@ export function getSupabaseConfig(): { url: string; key: string } {
   const localUrl = localStorage.getItem('techfix_supabase_url') || '';
   const localKey = localStorage.getItem('techfix_supabase_anon_key') || '';
 
-  const url = (localUrl || envUrl).trim();
+  const rawUrl = (localUrl || envUrl).trim();
+  const url = normalizeSupabaseUrl(rawUrl);
   const key = (localKey || envKey).trim();
 
   return { url, key };
 }
 
 export function saveSupabaseConfig(url: string, key: string) {
-  if (url) {
-    localStorage.setItem('techfix_supabase_url', url.trim());
+  const cleanUrl = normalizeSupabaseUrl(url);
+  const cleanKey = (key || '').trim();
+
+  if (cleanUrl) {
+    localStorage.setItem('techfix_supabase_url', cleanUrl);
   } else {
     localStorage.removeItem('techfix_supabase_url');
   }
 
-  if (key) {
-    localStorage.setItem('techfix_supabase_anon_key', key.trim());
+  if (cleanKey) {
+    localStorage.setItem('techfix_supabase_anon_key', cleanKey);
   } else {
     localStorage.removeItem('techfix_supabase_anon_key');
   }
 
   cachedClient = null;
+  lastUsedConfig = '';
 }
 
 export function getSupabase(): SupabaseClient | null {
@@ -46,33 +76,51 @@ export function getSupabase(): SupabaseClient | null {
     cachedClient = createClient(url, key, {
       auth: {
         persistSession: false,
+        autoRefreshToken: false,
       },
     });
     lastUsedConfig = configSignature;
     return cachedClient;
   } catch (err) {
-    console.error('Failed to initialize Supabase client:', err);
+    console.error('Falha ao inicializar cliente Supabase:', err);
     return null;
   }
 }
 
-export async function testSupabaseConnection(url: string, key: string): Promise<{ success: boolean; message: string }> {
+export async function testSupabaseConnection(rawUrl: string, rawKey: string): Promise<{ success: boolean; message: string; normalizedUrl: string }> {
+  const url = normalizeSupabaseUrl(rawUrl);
+  const key = rawKey.trim();
+
+  if (!url || !key) {
+    return { success: false, message: 'URL ou Chave Anon não preenchidos.', normalizedUrl: url };
+  }
+
   try {
-    const testClient = createClient(url.trim(), key.trim());
+    const testClient = createClient(url, key, {
+      auth: { persistSession: false, autoRefreshToken: false }
+    });
     const { error } = await testClient.from('orders').select('count', { count: 'exact', head: true });
     
     if (error) {
       if (error.code === '42P01') {
         return {
           success: false,
-          message: 'Conectou ao Supabase, mas a tabela "orders" ainda não existe! Execute o script SQL no editor do Supabase.',
+          normalizedUrl: url,
+          message: 'Conectou ao Supabase, mas a tabela "orders" ainda não existe! Clique no botão abaixo para copiar o Script SQL e execute no "SQL Editor" do Supabase.',
         };
       }
-      return { success: false, message: `Erro: ${error.message}` };
+      if (error.code === 'PGRST125') {
+        return {
+          success: false,
+          normalizedUrl: url,
+          message: 'Caminho inválido na URL do Supabase. Certifique-se de usar https://<seu-projeto>.supabase.co',
+        };
+      }
+      return { success: false, normalizedUrl: url, message: `Erro: ${error.message} (Código: ${error.code})` };
     }
 
-    return { success: true, message: 'Conexão estabelecida com sucesso! Banco online e sincronizado.' };
+    return { success: true, normalizedUrl: url, message: 'Conexão estabelecida com sucesso! Banco online e sincronizado.' };
   } catch (err: any) {
-    return { success: false, message: err?.message || 'Erro ao conectar ao Supabase' };
+    return { success: false, normalizedUrl: url, message: err?.message || 'Erro ao conectar ao Supabase' };
   }
 }

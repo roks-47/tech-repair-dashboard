@@ -97,8 +97,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setTesting(true);
     setTestResult(null);
     const res = await testSupabaseConnection(supabaseUrl, supabaseKey);
+    if (res.normalizedUrl && res.normalizedUrl !== supabaseUrl) {
+      setSupabaseUrl(res.normalizedUrl);
+    }
     setTesting(false);
-    setTestResult(res);
+    setTestResult({ success: res.success, message: res.message });
   };
 
   const handleCopySql = () => {

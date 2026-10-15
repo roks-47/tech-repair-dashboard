@@ -4,7 +4,7 @@ import { getSupabase } from './supabase';
 const LOCAL_STORAGE_ORDERS_KEY = 'techfix_orders_data_v1';
 const LOCAL_STORAGE_SETTINGS_KEY = 'techfix_settings_v1';
 
-const INITIAL_MOCK_ORDERS: Order[] = [
+export const INITIAL_MOCK_ORDERS: Order[] = [
   {
     id: 'mock-1',
     os_number: 1001,
@@ -111,22 +111,67 @@ export const DEFAULT_SETTINGS: ShopSettings = {
   pin_required: false,
 };
 
-export function getSettings(): ShopSettings {
+// Helper: sincroniza dados com o servidor local (compartilhado entre PC e celular)
+async function syncToServerApi(endpoint: string, data: any): Promise<boolean> {
   try {
-    const raw = localStorage.getItem(LOCAL_STORAGE_SETTINGS_KEY);
-    if (!raw) return DEFAULT_SETTINGS;
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return res.ok;
   } catch {
-    return DEFAULT_SETTINGS;
+    return false;
   }
 }
 
+async function fetchFromServerApi<T>(endpoint: string): Promise<T | null> {
+  try {
+    const res = await fetch(endpoint);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+// Salva ordens localmente (tanto no localStorage quanto no servidor da rede local)
+async function persistLocalOrders(orders: Order[]): Promise<void> {
+  try {
+    localStorage.setItem(LOCAL_STORAGE_ORDERS_KEY, JSON.stringify(orders));
+  } catch (e) {
+    console.error('Falha ao gravar localStorage:', e);
+  }
+  // Envia em segundo plano para o arquivo orders.json no PC
+  syncToServerApi('/api/orders', orders);
+}
+
+export function getSettings(): ShopSettings {
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_SETTINGS_KEY);
+    if (raw) {
+      return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    }
+  } catch {
+    // fallback
+  }
+  return DEFAULT_SETTINGS;
+}
+
 export function saveSettings(settings: ShopSettings) {
-  localStorage.setItem(LOCAL_STORAGE_SETTINGS_KEY, JSON.stringify(settings));
+  try {
+    localStorage.setItem(LOCAL_STORAGE_SETTINGS_KEY, JSON.stringify(settings));
+    syncToServerApi('/api/settings', settings);
+  } catch (e) {
+    console.error('Falha ao salvar configurações:', e);
+  }
 }
 
 export async function fetchOrders(): Promise<{ orders: Order[]; isCloud: boolean }> {
   const supabase = getSupabase();
+
+  // 1. Tenta buscar do Supabase se configurado
   if (supabase) {
     try {
       const { data, error } = await supabase
@@ -135,17 +180,16 @@ export async function fetchOrders(): Promise<{ orders: Order[]; isCloud: boolean
         .order('os_number', { ascending: false });
 
       if (error) {
-        console.warn('Erro ao buscar do Supabase, recorrendo ao cache local:', error);
+        console.warn('Erro ao buscar do Supabase (recorrendo ao banco local/disco):', error);
       } else if (data) {
-        // Map database numbers/fields
         const mapped: Order[] = data.map((d: any) => ({
           ...d,
           cost_parts: Number(d.cost_parts || 0),
           total_price: Number(d.total_price || 0),
           os_number: Number(d.os_number || 0),
         }));
-        // Update local cache
-        localStorage.setItem(LOCAL_STORAGE_ORDERS_KEY, JSON.stringify(mapped));
+        // Salva cache local
+        await persistLocalOrders(mapped);
         return { orders: mapped, isCloud: true };
       }
     } catch (e) {
@@ -153,25 +197,59 @@ export async function fetchOrders(): Promise<{ orders: Order[]; isCloud: boolean
     }
   }
 
-  // Fallback to localStorage
+  // 2. Se não está em nuvem ou deu erro no Supabase, busca do servidor compartilhado local (disco)
+  const serverOrders = await fetchFromServerApi<Order[]>('/api/orders');
+  if (Array.isArray(serverOrders) && serverOrders.length > 0) {
+    try {
+      localStorage.setItem(LOCAL_STORAGE_ORDERS_KEY, JSON.stringify(serverOrders));
+    } catch {}
+    return { orders: serverOrders, isCloud: false };
+  }
+
+  // 3. Fallback para localStorage
   try {
     const local = localStorage.getItem(LOCAL_STORAGE_ORDERS_KEY);
     if (local) {
-      return { orders: JSON.parse(local), isCloud: false };
+      const parsed = JSON.parse(local);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return { orders: parsed, isCloud: false };
+      }
     }
   } catch (e) {
     console.error('Falha ao ler localStorage:', e);
   }
 
-  // First time mock
-  localStorage.setItem(LOCAL_STORAGE_ORDERS_KEY, JSON.stringify(INITIAL_MOCK_ORDERS));
+  // 4. Primeira execução: inicializa dados modelo
+  try {
+    localStorage.setItem(LOCAL_STORAGE_ORDERS_KEY, JSON.stringify(INITIAL_MOCK_ORDERS));
+    syncToServerApi('/api/orders', INITIAL_MOCK_ORDERS);
+  } catch {}
   return { orders: INITIAL_MOCK_ORDERS, isCloud: false };
 }
 
-export async function createOrder(orderData: Omit<Order, 'id' | 'os_number' | 'created_at' | 'updated_at'>): Promise<Order> {
+export async function createOrder(
+  orderData: Omit<Order, 'id' | 'os_number' | 'created_at' | 'updated_at'>
+): Promise<{ order: Order; cloudSynced: boolean; cloudError?: string }> {
   const supabase = getSupabase();
   const now = new Date().toISOString();
+  let cloudSynced = false;
+  let cloudError: string | undefined;
 
+  // Busca lista atual para gerar novo número de OS
+  const { orders } = await fetchOrders();
+  const nextOsNumber = orders.length > 0 
+    ? Math.max(...orders.map(o => Number(o.os_number) || 1000)) + 1 
+    : 1001;
+
+  let newOrder: Order = {
+    ...orderData,
+    id: 'local-' + Date.now(),
+    os_number: nextOsNumber,
+    created_at: now,
+    updated_at: now,
+  };
+
+  // Se o Supabase estiver configurado, tenta salvar na nuvem
   if (supabase) {
     try {
       const { data, error } = await supabase
@@ -185,46 +263,79 @@ export async function createOrder(orderData: Omit<Order, 'id' | 'os_number' | 'c
         .single();
 
       if (!error && data) {
-        const newOrder: Order = {
+        newOrder = {
           ...data,
           cost_parts: Number(data.cost_parts || 0),
           total_price: Number(data.total_price || 0),
-          os_number: Number(data.os_number || 0),
+          os_number: Number(data.os_number || nextOsNumber),
         };
-        // Update local cache
-        const local = await fetchOrders();
-        localStorage.setItem(LOCAL_STORAGE_ORDERS_KEY, JSON.stringify([newOrder, ...local.orders.filter(o => o.id !== newOrder.id)]));
-        return newOrder;
+        cloudSynced = true;
+      } else if (error) {
+        cloudError = error.message;
+        console.warn('Erro ao inserir no Supabase (salvo localmente no disco):', error);
       }
-      console.warn('Erro ao inserir no Supabase, salvando local:', error);
-    } catch (e) {
-      console.error('Falha ao comunicar com Supabase:', e);
+    } catch (e: any) {
+      cloudError = e.message;
+      console.error('Exceção ao inserir no Supabase:', e);
     }
   }
 
-  // Local storage save
-  const { orders } = await fetchOrders();
-  const nextOsNumber = orders.length > 0 
-    ? Math.max(...orders.map(o => o.os_number || 1000)) + 1 
-    : 1001;
+  // SEMPRE persiste localmente e no arquivo compartilhado do PC
+  const updatedOrders = [newOrder, ...orders.filter(o => o.id !== newOrder.id)];
+  await persistLocalOrders(updatedOrders);
 
-  const newOrder: Order = {
-    ...orderData,
-    id: 'local-' + Date.now(),
-    os_number: nextOsNumber,
-    created_at: now,
-    updated_at: now,
-  };
-
-  const updatedOrders = [newOrder, ...orders];
-  localStorage.setItem(LOCAL_STORAGE_ORDERS_KEY, JSON.stringify(updatedOrders));
-  return newOrder;
+  return { order: newOrder, cloudSynced, cloudError };
 }
 
-export async function updateOrder(id: string, updates: Partial<Order>): Promise<Order> {
+export async function updateOrder(
+  id: string, 
+  updates: Partial<Order>
+): Promise<{ order: Order; cloudSynced: boolean; cloudError?: string }> {
   const supabase = getSupabase();
   const now = new Date().toISOString();
+  let cloudSynced = false;
+  let cloudError: string | undefined;
 
+  // 1. Atualiza na lista local e no disco primeiro para NUNCA perder os dados
+  const { orders } = await fetchOrders();
+  let updatedOrder: Order | null = null;
+  const nextList = orders.map(o => {
+    if (o.id === id) {
+      updatedOrder = { 
+        ...o, 
+        ...updates, 
+        updated_at: now 
+      };
+      return updatedOrder;
+    }
+    return o;
+  });
+
+  if (!updatedOrder) {
+    // Se não encontrou, cria a ordem com as alterações
+    updatedOrder = {
+      id,
+      os_number: 1000,
+      client_name: 'Cliente',
+      client_phone: '',
+      device_type: 'outro',
+      device_brand: '',
+      device_model: '',
+      defect_reported: '',
+      status: 'aguardando_orcamento',
+      technician_name: 'Técnico',
+      cost_parts: 0,
+      total_price: 0,
+      created_at: now,
+      updated_at: now,
+      ...updates,
+    } as Order;
+    nextList.unshift(updatedOrder);
+  }
+
+  await persistLocalOrders(nextList);
+
+  // 2. Se o Supabase estiver configurado, tenta atualizar na nuvem
   if (supabase) {
     try {
       const { data, error } = await supabase
@@ -238,40 +349,18 @@ export async function updateOrder(id: string, updates: Partial<Order>): Promise<
         .single();
 
       if (!error && data) {
-        const updated: Order = {
-          ...data,
-          cost_parts: Number(data.cost_parts || 0),
-          total_price: Number(data.total_price || 0),
-          os_number: Number(data.os_number || 0),
-        };
-        const local = await fetchOrders();
-        const nextList = local.orders.map(o => o.id === id ? updated : o);
-        localStorage.setItem(LOCAL_STORAGE_ORDERS_KEY, JSON.stringify(nextList));
-        return updated;
+        cloudSynced = true;
+      } else if (error) {
+        cloudError = error.message;
+        console.warn('Erro ao atualizar no Supabase (alteração gravada localmente):', error);
       }
-      console.warn('Erro ao atualizar no Supabase, salvando local:', error);
-    } catch (e) {
-      console.error('Falha ao atualizar no Supabase:', e);
+    } catch (e: any) {
+      cloudError = e.message;
+      console.error('Falha de conexão Supabase ao atualizar:', e);
     }
   }
 
-  // Local storage update
-  const { orders } = await fetchOrders();
-  let updatedOrder: Order | null = null;
-  const nextList = orders.map(o => {
-    if (o.id === id) {
-      updatedOrder = { ...o, ...updates, updated_at: now };
-      return updatedOrder;
-    }
-    return o;
-  });
-
-  if (!updatedOrder) {
-    throw new Error('Ordem não encontrada');
-  }
-
-  localStorage.setItem(LOCAL_STORAGE_ORDERS_KEY, JSON.stringify(nextList));
-  return updatedOrder;
+  return { order: updatedOrder, cloudSynced, cloudError };
 }
 
 export async function deleteOrder(id: string): Promise<boolean> {
@@ -279,23 +368,15 @@ export async function deleteOrder(id: string): Promise<boolean> {
 
   if (supabase) {
     try {
-      const { error } = await supabase.from('orders').delete().eq('id', id);
-      if (!error) {
-        const { orders } = await fetchOrders();
-        const filtered = orders.filter(o => o.id !== id);
-        localStorage.setItem(LOCAL_STORAGE_ORDERS_KEY, JSON.stringify(filtered));
-        return true;
-      }
-      console.warn('Erro ao deletar no Supabase:', error);
+      await supabase.from('orders').delete().eq('id', id);
     } catch (e) {
-      console.error('Falha ao deletar no Supabase:', e);
+      console.warn('Falha ao deletar no Supabase:', e);
     }
   }
 
-  // Local storage delete
   const { orders } = await fetchOrders();
   const filtered = orders.filter(o => o.id !== id);
-  localStorage.setItem(LOCAL_STORAGE_ORDERS_KEY, JSON.stringify(filtered));
+  await persistLocalOrders(filtered);
   return true;
 }
 

@@ -22,7 +22,13 @@ import { OrderModal } from './components/OrderModal';
 import { OrderDetailsModal } from './components/OrderDetailsModal';
 import { SettingsModal } from './components/SettingsModal';
 import { PinModal } from './components/PinModal';
-import { Plus, Inbox, RefreshCw } from 'lucide-react';
+import { Plus, Inbox, RefreshCw, CheckCircle2, AlertTriangle, X } from 'lucide-react';
+
+interface ToastMessage {
+  id: number;
+  type: 'success' | 'warning' | 'error';
+  message: string;
+}
 
 export const App: React.FC = () => {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -30,6 +36,7 @@ export const App: React.FC = () => {
   const [isCloud, setIsCloud] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
   // Security Lock
   const [isLocked, setIsLocked] = useState<boolean>(() => {
@@ -48,6 +55,15 @@ export const App: React.FC = () => {
   const [orderToEdit, setOrderToEdit] = useState<Order | null>(null);
   const [orderForDetails, setOrderForDetails] = useState<Order | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
+
+  // Helper toast notification
+  const showToast = useCallback((message: string, type: 'success' | 'warning' | 'error' = 'success') => {
+    const id = Date.now();
+    setToasts((prev) => [...prev, { id, type, message }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 4000);
+  }, []);
 
   // Load orders
   const loadData = useCallback(async (silent = false) => {
@@ -68,42 +84,89 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     loadData();
-    // Subscribe to realtime changes (Supabase)
+
+    // Sincronização em tempo real quando Supabase estiver ativo
     const unsubscribe = subscribeToRealtimeOrders(() => {
       loadData(true);
     });
 
+    // Sincroniza sempre que a janela ou o celular ganha foco (ao trocar de aba/desbloquear tela)
+    const handleFocus = () => loadData(true);
+    window.addEventListener('focus', handleFocus);
+
+    // Polling suave a cada 12 segundos para manter PC e Celular na mesma rede sincronizados
+    const interval = setInterval(() => {
+      loadData(true);
+    }, 12000);
+
     return () => {
       unsubscribe();
+      window.removeEventListener('focus', handleFocus);
+      clearInterval(interval);
     };
   }, [loadData]);
 
   // Handle Quick Status Change
   const handleUpdateStatus = async (id: string, newStatus: OSStatus) => {
     try {
-      const updated = await updateOrder(id, { status: newStatus });
+      const { order: updated, cloudError } = await updateOrder(id, { status: newStatus });
       setOrders((prev) => prev.map((o) => (o.id === id ? updated : o)));
       if (orderForDetails?.id === id) {
         setOrderForDetails(updated);
       }
-    } catch (err) {
-      alert('Erro ao atualizar status');
+
+      if (cloudError) {
+        showToast(`Salvo localmente! Aviso da nuvem: ${cloudError}`, 'warning');
+      } else {
+        showToast(`Status da OS #${updated.os_number} atualizado com sucesso!`, 'success');
+      }
+    } catch (err: any) {
+      showToast(`Erro ao atualizar status: ${err.message}`, 'error');
     }
   };
 
   // Handle Save (Create or Edit)
   const handleSaveOrder = async (orderData: any) => {
-    if (orderToEdit) {
-      const updated = await updateOrder(orderToEdit.id, orderData);
-      setOrders((prev) => prev.map((o) => (o.id === orderToEdit.id ? updated : o)));
-      if (orderForDetails?.id === orderToEdit.id) {
-        setOrderForDetails(updated);
+    try {
+      if (orderToEdit) {
+        const { order: updated, cloudError } = await updateOrder(orderToEdit.id, orderData);
+        setOrders((prev) => prev.map((o) => (o.id === orderToEdit.id ? updated : o)));
+        if (orderForDetails?.id === orderToEdit.id) {
+          setOrderForDetails(updated);
+        }
+        setOrderToEdit(null);
+
+        if (cloudError) {
+          showToast(`Alterações da OS #${updated.os_number} salvas no disco/local! (Aviso da nuvem: ${cloudError})`, 'warning');
+        } else {
+          showToast(`Alterações da OS #${updated.os_number} salvas com sucesso!`, 'success');
+        }
+      } else {
+        const { order: created, cloudError } = await createOrder(orderData);
+        setOrders((prev) => [created, ...prev]);
+
+        if (cloudError) {
+          showToast(`OS #${created.os_number} criada e salva no disco/local! (Aviso da nuvem: ${cloudError})`, 'warning');
+        } else {
+          showToast(`Ordem de Serviço #${created.os_number} cadastrada com sucesso!`, 'success');
+        }
       }
-      setOrderToEdit(null);
-    } else {
-      const created = await createOrder(orderData);
-      setOrders((prev) => [created, ...prev]);
+    } catch (err: any) {
+      showToast(`Erro ao salvar ordem: ${err?.message || 'Falha desconhecida'}`, 'error');
     }
+  };
+
+  // Handle Live Auto-Save (from workbench details)
+  const handleAutoSave = async (id: string, updates: Partial<Order>): Promise<Order> => {
+    const { order: updated, cloudError } = await updateOrder(id, updates);
+    setOrders((prev) => prev.map((o) => (o.id === id ? updated : o)));
+    if (orderForDetails?.id === id) {
+      setOrderForDetails(updated);
+    }
+    if (cloudError) {
+      console.warn('Erro ao sincronizar na nuvem (salvo localmente):', cloudError);
+    }
+    return updated;
   };
 
   // Handle Delete
@@ -114,8 +177,9 @@ export const App: React.FC = () => {
       if (orderForDetails?.id === id) {
         setOrderForDetails(null);
       }
-    } catch (err) {
-      alert('Erro ao excluir ordem');
+      showToast('Ordem de Serviço excluída com sucesso!', 'success');
+    } catch (err: any) {
+      showToast(`Erro ao excluir ordem: ${err.message}`, 'error');
     }
   };
 
@@ -126,6 +190,7 @@ export const App: React.FC = () => {
     if (!newSettings.pin_required) {
       setIsLocked(false);
     }
+    showToast('Configurações salvas e aplicadas!', 'success');
   };
 
   const handleSelectTechnician = (tech: string) => {
@@ -181,6 +246,37 @@ export const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col selection:bg-blue-600 selection:text-white">
       
+      {/* Toast Notifications */}
+      <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-sm w-full pointer-events-none">
+        {toasts.map((toast) => (
+          <div
+            key={toast.id}
+            className={`pointer-events-auto flex items-center justify-between p-3.5 rounded-2xl shadow-2xl border backdrop-blur-md text-xs font-semibold animate-in slide-in-from-top duration-200 ${
+              toast.type === 'success'
+                ? 'bg-emerald-950/90 text-emerald-200 border-emerald-500/40'
+                : toast.type === 'warning'
+                ? 'bg-amber-950/90 text-amber-200 border-amber-500/40'
+                : 'bg-rose-950/90 text-rose-200 border-rose-500/40'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              {toast.type === 'success' ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              ) : (
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+              )}
+              <span>{toast.message}</span>
+            </div>
+            <button
+              onClick={() => setToasts((prev) => prev.filter((t) => t.id !== toast.id))}
+              className="text-slate-400 hover:text-white ml-2 p-1"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        ))}
+      </div>
+
       {/* PIN Security Modal if App is locked */}
       {isLocked && (
         <PinModal
@@ -238,7 +334,10 @@ export const App: React.FC = () => {
           </div>
 
           <button
-            onClick={() => loadData(true)}
+            onClick={() => {
+              loadData(true);
+              showToast('Lista de ordens atualizada!', 'success');
+            }}
             disabled={refreshing}
             className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200 transition-colors p-1.5 rounded-lg hover:bg-slate-800"
             title="Atualizar lista"
@@ -327,17 +426,14 @@ export const App: React.FC = () => {
         activeTechnician={settings.active_technician}
       />
 
-      {/* Order Details & Print Receipt Modal */}
+      {/* Order Details & Live Autosave Workbench Sheet */}
       <OrderDetailsModal
         order={orderForDetails}
         shopName={settings.shop_name}
+        technicians={settings.technicians}
         isOpen={!!orderForDetails}
         onClose={() => setOrderForDetails(null)}
-        onEdit={(ord) => {
-          setOrderForDetails(null);
-          setOrderToEdit(ord);
-          setIsOrderModalOpen(true);
-        }}
+        onAutoSave={handleAutoSave}
         onDelete={handleDeleteOrder}
       />
 

@@ -32,6 +32,10 @@ import { HistoryPage } from './components/HistoryPage';
 import { PartsPage } from './components/PartsPage';
 import { Plus, Inbox, RefreshCw, CheckCircle2, AlertTriangle, X } from 'lucide-react';
 
+// Ordens encerradas (finalizadas ou canceladas) saem desta aba: finalizadas ficam no Histórico
+// e canceladas ficam em Histórico > Canceladas
+const isClosed = (o: Order) => o.status === 'entregue' || o.status === 'cancelado';
+
 interface ToastMessage {
   id: number;
   type: 'success' | 'warning' | 'error';
@@ -149,6 +153,10 @@ export const App: React.FC = () => {
 
       if (cloudError) {
         showToast(`Salvo localmente! Aviso da nuvem: ${cloudError}`, 'warning');
+      } else if (newStatus === 'entregue') {
+        showToast(`OS #${updated.os_number} finalizada e movida para o Histórico!`, 'success');
+      } else if (newStatus === 'cancelado') {
+        showToast(`OS #${updated.os_number} cancelada. Ela fica em Histórico > Canceladas.`, 'warning');
       } else {
         showToast(`Status da OS #${updated.os_number} atualizado com sucesso!`, 'success');
       }
@@ -241,15 +249,21 @@ export const App: React.FC = () => {
 
   // Filtered orders & counts
   const counts = useMemo(() => {
+    const open = orders.filter((o) => !isClosed(o));
     return {
-      all: orders.length,
-      celular: orders.filter((o) => o.device_type === 'celular').length,
-      videogame: orders.filter((o) => o.device_type === 'videogame').length,
+      all: open.length,
+      celular: open.filter((o) => o.device_type === 'celular').length,
+      videogame: open.filter((o) => o.device_type === 'videogame').length,
     };
   }, [orders]);
 
   const filteredOrders = useMemo(() => {
     return orders.filter((order) => {
+      // Encerradas não aparecem na aba Ordens
+      if (isClosed(order)) {
+        return false;
+      }
+
       // Type filter
       if (selectedType !== 'all' && order.device_type !== selectedType) {
         return false;
@@ -282,6 +296,20 @@ export const App: React.FC = () => {
       return true;
     });
   }, [orders, selectedType, selectedStatus, selectedTechnician, searchQuery]);
+
+  const renderCard = (order: Order) => (
+    <OrderCard
+      key={order.id}
+      order={order}
+      shopName={settings.shop_name}
+      onUpdateStatus={handleUpdateStatus}
+      onViewDetails={(ord) => setOrderForDetails(ord)}
+      onEdit={(ord) => {
+        setOrderToEdit(ord);
+        setIsOrderModalOpen(true);
+      }}
+    />
+  );
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col selection:bg-blue-600 selection:text-white">
@@ -404,19 +432,7 @@ export const App: React.FC = () => {
           </div>
         ) : filteredOrders.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filteredOrders.map((order) => (
-              <OrderCard
-                key={order.id}
-                order={order}
-                shopName={settings.shop_name}
-                onUpdateStatus={handleUpdateStatus}
-                onViewDetails={(ord) => setOrderForDetails(ord)}
-                onEdit={(ord) => {
-                  setOrderToEdit(ord);
-                  setIsOrderModalOpen(true);
-                }}
-              />
-            ))}
+            {filteredOrders.map(renderCard)}
           </div>
         ) : (
           <div className="bg-slate-900/40 border border-slate-800/80 rounded-3xl p-10 sm:p-14 text-center flex flex-col items-center justify-center max-w-lg mx-auto my-8">
@@ -429,7 +445,7 @@ export const App: React.FC = () => {
             <p className="text-xs sm:text-sm text-slate-400 max-w-xs mb-6">
               {searchQuery
                 ? 'Nenhum resultado corresponde à sua busca. Tente outros termos ou limpe o filtro.'
-                : 'Você ainda não possui ordens cadastradas nesta categoria.'}
+                : 'Nenhuma ordem em aberto nesta categoria. As finalizadas ficam na aba Histórico.'}
             </p>
             <button
               onClick={() => {

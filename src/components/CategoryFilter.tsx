@@ -159,8 +159,6 @@ export const CategoryFilter: React.FC<CategoryFilterProps> = ({
               <option value="em_bancada">🛠️ Na Bancada / Reparo</option>
               <option value="aguardando_peca">📦 Aguardando Peça</option>
               <option value="pronto">✅ Pronto p/ Retirada</option>
-              <option value="entregue">🏁 Entregue / Finalizado</option>
-              <option value="cancelado">❌ Cancelado</option>
             </select>
           </div>
         </div>

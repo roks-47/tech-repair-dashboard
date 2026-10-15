@@ -10,17 +10,22 @@ interface HistoryPageProps {
 
 export const HistoryPage: React.FC<HistoryPageProps> = ({ orders, onViewDetails }) => {
   const [query, setQuery] = useState('');
+  const [tab, setTab] = useState<'finished' | 'cancelled'>('finished');
 
-  // Histórico = ordens já entregues/finalizadas, da mais recente para a mais antiga
+  const countFinished = useMemo(() => orders.filter((o) => o.status === 'entregue').length, [orders]);
+  const countCancelled = useMemo(() => orders.filter((o) => o.status === 'cancelado').length, [orders]);
+
+  // Histórico = ordens finalizadas (ou canceladas, na outra aba), da mais recente para a mais antiga
   const finished = useMemo(() => {
-    const list = orders.filter((o) => o.status === 'entregue');
+    const wanted = tab === 'finished' ? 'entregue' : 'cancelado';
+    const list = orders.filter((o) => o.status === wanted);
     list.sort((a, b) => {
       const da = new Date((a as any).updated_at || a.created_at).getTime();
       const db = new Date((b as any).updated_at || b.created_at).getTime();
       return db - da;
     });
     return list;
-  }, [orders]);
+  }, [orders, tab]);
 
   const filtered = useMemo(() => {
     const q = query.toLowerCase().trim();
@@ -38,10 +43,31 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({ orders, onViewDetails 
   return (
     <main className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-5 sm:py-7 flex-1 w-full">
       <div className="flex items-center gap-2 mb-4">
-        <h2 className="text-sm sm:text-base font-bold text-slate-200">Histórico de serviços finalizados</h2>
+        <h2 className="text-sm sm:text-base font-bold text-slate-200">
+          {tab === 'finished' ? 'Histórico de serviços finalizados' : 'Ordens canceladas'}
+        </h2>
         <span className="text-xs text-slate-400 bg-slate-800 px-2 py-0.5 rounded-full font-mono">
           {filtered.length}
         </span>
+      </div>
+
+      <div className="flex bg-slate-900/90 p-1 rounded-xl border border-slate-800 w-fit mb-4">
+        <button
+          onClick={() => setTab('finished')}
+          className={`px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition-all ${
+            tab === 'finished' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+          }`}
+        >
+          Finalizadas ({countFinished})
+        </button>
+        <button
+          onClick={() => setTab('cancelled')}
+          className={`px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition-all ${
+            tab === 'cancelled' ? 'bg-rose-600 text-white' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+          }`}
+        >
+          Canceladas ({countCancelled})
+        </button>
       </div>
 
       <div className="relative mb-5">
@@ -74,7 +100,9 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({ orders, onViewDetails 
           <p className="text-xs sm:text-sm text-slate-400">
             {query
               ? 'Nenhum resultado para essa busca.'
-              : 'As ordens aparecem aqui quando o status for "Entregue / Finalizado".'}
+              : tab === 'finished'
+              ? 'As ordens aparecem aqui quando o status for "Entregue / Finalizado".'
+              : 'Nenhuma ordem cancelada.'}
           </p>
         </div>
       ) : (

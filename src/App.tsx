@@ -27,6 +27,9 @@ import { OrderModal } from './components/OrderModal';
 import { OrderDetailsModal } from './components/OrderDetailsModal';
 import { SettingsModal } from './components/SettingsModal';
 import { PinModal } from './components/PinModal';
+import { ViewTabs, type AppView } from './components/ViewTabs';
+import { HistoryPage } from './components/HistoryPage';
+import { PartsPage } from './components/PartsPage';
 import { Plus, Inbox, RefreshCw, CheckCircle2, AlertTriangle, X } from 'lucide-react';
 
 interface ToastMessage {
@@ -42,6 +45,7 @@ export const App: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const [view, setView] = useState<AppView>('orders');
 
   // Security Lock
   const [isLocked, setIsLocked] = useState<boolean>(() => {
@@ -336,7 +340,16 @@ export const App: React.FC = () => {
         onSelectTechnician={handleSelectTechnician}
       />
 
+      <ViewTabs view={view} onChange={setView} />
+
+      {view === 'history' && (
+        <HistoryPage orders={orders} onViewDetails={(ord) => setOrderForDetails(ord)} />
+      )}
+
+      {view === 'parts' && <PartsPage />}
+
       {/* Main Container */}
+      {view === 'orders' && (
       <main className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-5 sm:py-7 flex-1 w-full">
         
         {/* Financial Metrics Summary */}
@@ -432,8 +445,10 @@ export const App: React.FC = () => {
         )}
 
       </main>
+      )}
 
       {/* Floating Action Button for Mobile screens (Sticky Bottom-Right) */}
+      {view === 'orders' && (
       <div className="fixed bottom-5 right-5 sm:hidden z-20">
         <button
           onClick={() => {
@@ -446,6 +461,7 @@ export const App: React.FC = () => {
           <Plus className="w-7 h-7 stroke-[2.5]" />
         </button>
       </div>
+      )}
 
       {/* MODALS */}
       

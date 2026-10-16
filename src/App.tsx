@@ -30,6 +30,8 @@ import { PinModal } from './components/PinModal';
 import { ViewTabs, type AppView } from './components/ViewTabs';
 import { HistoryPage } from './components/HistoryPage';
 import { PartsPage } from './components/PartsPage';
+import { LoginScreen } from './components/LoginScreen';
+import { useAuthSession } from './lib/auth';
 import { Plus, Inbox, RefreshCw, CheckCircle2, AlertTriangle, X } from 'lucide-react';
 
 // Ordens encerradas (finalizadas ou canceladas) saem desta aba: finalizadas ficam no Histórico
@@ -42,7 +44,12 @@ interface ToastMessage {
   message: string;
 }
 
-export const App: React.FC = () => {
+interface AppContentProps {
+  onSignOut?: () => void;
+  userEmail?: string;
+}
+
+const AppContent: React.FC<AppContentProps> = ({ onSignOut, userEmail }) => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [settings, setSettings] = useState<ShopSettings>(getSettings());
   const [isCloud, setIsCloud] = useState<boolean>(false);
@@ -368,7 +375,7 @@ export const App: React.FC = () => {
         onSelectTechnician={handleSelectTechnician}
       />
 
-      <ViewTabs view={view} onChange={setView} />
+      <ViewTabs view={view} onChange={setView} onSignOut={onSignOut} userEmail={userEmail} />
 
       {view === 'history' && (
         <HistoryPage orders={orders} onViewDetails={(ord) => setOrderForDetails(ord)} />
@@ -517,6 +524,30 @@ export const App: React.FC = () => {
       )}
 
     </div>
+  );
+};
+
+// Só carrega o sistema (e os dados) depois do login quando a nuvem está configurada
+export const App: React.FC = () => {
+  const { cloudEnabled, session, checking, signOut } = useAuthSession();
+
+  if (checking) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="w-10 h-10 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (cloudEnabled && !session) {
+    return <LoginScreen />;
+  }
+
+  return (
+    <AppContent
+      onSignOut={cloudEnabled ? signOut : undefined}
+      userEmail={session?.user.email}
+    />
   );
 };
 

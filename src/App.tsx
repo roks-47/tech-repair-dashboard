@@ -31,7 +31,9 @@ import { ViewTabs, type AppView } from './components/ViewTabs';
 import { HistoryPage } from './components/HistoryPage';
 import { PartsPage } from './components/PartsPage';
 import { LoginScreen } from './components/LoginScreen';
-import { useAuthSession } from './lib/auth';
+import { MfaChallengeScreen } from './components/MfaChallengeScreen';
+import { SecurityModal } from './components/SecurityModal';
+import { useAuthSession, useIdleSignOut } from './lib/auth';
 import { Plus, Inbox, RefreshCw, CheckCircle2, AlertTriangle, X } from 'lucide-react';
 
 // Ordens encerradas (finalizadas ou canceladas) saem desta aba: finalizadas ficam no Histórico
@@ -57,6 +59,7 @@ const AppContent: React.FC<AppContentProps> = ({ onSignOut, userEmail }) => {
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [view, setView] = useState<AppView>('orders');
+  const [isSecurityOpen, setIsSecurityOpen] = useState(false);
 
   // Security Lock
   const [isLocked, setIsLocked] = useState<boolean>(() => {
@@ -375,7 +378,13 @@ const AppContent: React.FC<AppContentProps> = ({ onSignOut, userEmail }) => {
         onSelectTechnician={handleSelectTechnician}
       />
 
-      <ViewTabs view={view} onChange={setView} onSignOut={onSignOut} userEmail={userEmail} />
+      <ViewTabs
+        view={view}
+        onChange={setView}
+        onSignOut={onSignOut}
+        onOpenSecurity={onSignOut ? () => setIsSecurityOpen(true) : undefined}
+        userEmail={userEmail}
+      />
 
       {view === 'history' && (
         <HistoryPage orders={orders} onViewDetails={(ord) => setOrderForDetails(ord)} />
@@ -487,6 +496,7 @@ const AppContent: React.FC<AppContentProps> = ({ onSignOut, userEmail }) => {
       )}
 
       {/* MODALS */}
+      {isSecurityOpen && onSignOut && <SecurityModal onClose={() => setIsSecurityOpen(false)} />}
       
       {/* Create / Edit OS Modal */}
       <OrderModal
@@ -529,9 +539,12 @@ const AppContent: React.FC<AppContentProps> = ({ onSignOut, userEmail }) => {
 
 // Só carrega o sistema (e os dados) depois do login quando a nuvem está configurada
 export const App: React.FC = () => {
-  const { cloudEnabled, session, checking, signOut } = useAuthSession();
+  const { cloudEnabled, session, checking, needsMfa, aalReady, recheckAal, signOut } = useAuthSession();
 
-  if (checking) {
+  // Sai sozinho após 30 minutos sem uso (protege aparelhos esquecidos abertos)
+  useIdleSignOut(cloudEnabled && !!session, signOut, 30);
+
+  if (checking || (cloudEnabled && session && !aalReady)) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center">
         <div className="w-10 h-10 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
@@ -541,6 +554,10 @@ export const App: React.FC = () => {
 
   if (cloudEnabled && !session) {
     return <LoginScreen />;
+  }
+
+  if (cloudEnabled && needsMfa) {
+    return <MfaChallengeScreen onVerified={recheckAal} onSignOut={signOut} />;
   }
 
   return (

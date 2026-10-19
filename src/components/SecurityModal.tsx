@@ -4,6 +4,9 @@ import { getSupabase } from '../lib/supabase';
 
 interface SecurityModalProps {
   onClose: () => void;
+  forced?: boolean;
+  onDone?: () => void;
+  onSignOut?: () => void;
 }
 
 interface EnrollData {
@@ -12,7 +15,7 @@ interface EnrollData {
   secret: string;
 }
 
-export const SecurityModal: React.FC<SecurityModalProps> = ({ onClose }) => {
+export const SecurityModal: React.FC<SecurityModalProps> = ({ onClose, forced, onDone, onSignOut }) => {
   const [loading, setLoading] = useState(true);
   const [activeFactorId, setActiveFactorId] = useState<string | null>(null);
   const [enroll, setEnroll] = useState<EnrollData | null>(null);
@@ -90,6 +93,7 @@ export const SecurityModal: React.FC<SecurityModalProps> = ({ onClose }) => {
     setCode('');
     setMessage('Verificação em duas etapas ativada! No próximo login será pedido o código.');
     refresh();
+    onDone?.();
   };
 
   const disable = async () => {
@@ -115,10 +119,19 @@ export const SecurityModal: React.FC<SecurityModalProps> = ({ onClose }) => {
           <h2 className="text-base font-bold text-white flex items-center gap-2">
             <ShieldCheck className="w-5 h-5 text-emerald-400" /> Segurança da conta
           </h2>
-          <button onClick={onClose} className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800">
-            <X className="w-5 h-5" />
-          </button>
+          {!forced && (
+            <button onClick={onClose} className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800">
+              <X className="w-5 h-5" />
+            </button>
+          )}
         </div>
+
+        {forced && (
+          <p className="text-xs text-amber-200 bg-amber-950/40 border border-amber-500/30 rounded-lg px-3 py-2 mb-3">
+            Por segurança dos dados dos clientes, a verificação em duas etapas é obrigatória.
+            Ative agora para continuar.
+          </p>
+        )}
 
         {error && (
           <p className="text-xs text-rose-400 bg-rose-950/40 border border-rose-500/30 rounded-lg px-3 py-2 mb-3">
@@ -207,6 +220,12 @@ export const SecurityModal: React.FC<SecurityModalProps> = ({ onClose }) => {
               {busy ? 'Preparando...' : 'Ativar verificação em duas etapas'}
             </button>
           </div>
+        )}
+
+        {forced && onSignOut && (
+          <button onClick={onSignOut} className="mt-4 text-xs text-slate-500 hover:text-slate-300">
+            Sair
+          </button>
         )}
       </div>
     </div>

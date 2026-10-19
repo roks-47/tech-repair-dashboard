@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { getSupabase } from './supabase';
 
+// Exige 2FA de todos os usuários: quem ainda não ativou é obrigado a ativar antes de entrar
+export const REQUIRE_MFA = true;
+
 export async function signInWithPassword(
   email: string,
   password: string
@@ -31,6 +34,8 @@ export function useAuthSession() {
   const [session, setSession] = useState<Session | null>(null);
   const [checking, setChecking] = useState<boolean>(!!supabase);
   const [needsMfa, setNeedsMfa] = useState(false);
+  const [needsEnroll, setNeedsEnroll] = useState(false);
+  const [aalFailed, setAalFailed] = useState(false);
   const [aalReady, setAalReady] = useState(true);
   const hadSession = useRef(false);
 
@@ -40,8 +45,16 @@ export function useAuthSession() {
       setAalReady(true);
       return;
     }
-    const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-    setNeedsMfa(!!data && data.nextLevel === 'aal2' && data.currentLevel !== 'aal2');
+    const { data, error } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+    if (error || !data) {
+      // Se não deu para verificar, NÃO libera o sistema
+      setAalFailed(true);
+      setAalReady(true);
+      return;
+    }
+    setAalFailed(false);
+    setNeedsMfa(data.nextLevel === 'aal2' && data.currentLevel !== 'aal2');
+    setNeedsEnroll(data.nextLevel === 'aal1');
     setAalReady(true);
   };
 
@@ -65,6 +78,8 @@ export function useAuthSession() {
       if (!newSession) {
         hadSession.current = false;
         setNeedsMfa(false);
+        setNeedsEnroll(false);
+        setAalFailed(false);
         setAalReady(true);
         return;
       }
@@ -90,6 +105,8 @@ export function useAuthSession() {
     session,
     checking,
     needsMfa,
+    needsEnroll,
+    aalFailed,
     aalReady,
     recheckAal: checkAal,
     signOut: async () => {

@@ -33,7 +33,8 @@ import { PartsPage } from './components/PartsPage';
 import { LoginScreen } from './components/LoginScreen';
 import { MfaChallengeScreen } from './components/MfaChallengeScreen';
 import { SecurityModal } from './components/SecurityModal';
-import { useAuthSession, useIdleSignOut } from './lib/auth';
+import { ConfigRequiredScreen } from './components/ConfigRequiredScreen';
+import { useAuthSession, useIdleSignOut, REQUIRE_MFA } from './lib/auth';
 import { Plus, Inbox, RefreshCw, CheckCircle2, AlertTriangle, X } from 'lucide-react';
 
 // Ordens encerradas (finalizadas ou canceladas) saem desta aba: finalizadas ficam no Histórico
@@ -539,11 +540,22 @@ const AppContent: React.FC<AppContentProps> = ({ onSignOut, userEmail }) => {
 
 // Só carrega o sistema (e os dados) depois do login quando a nuvem está configurada
 export const App: React.FC = () => {
-  const { cloudEnabled, session, checking, needsMfa, aalReady, recheckAal, signOut } = useAuthSession();
+  const {
+    cloudEnabled,
+    session,
+    checking,
+    needsMfa,
+    needsEnroll,
+    aalFailed,
+    aalReady,
+    recheckAal,
+    signOut,
+  } = useAuthSession();
 
   // Sai sozinho após 30 minutos sem uso (protege aparelhos esquecidos abertos)
   useIdleSignOut(cloudEnabled && !!session, signOut, 30);
 
+  // 1) Verificando sessão
   if (checking || (cloudEnabled && session && !aalReady)) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center">
@@ -552,20 +564,45 @@ export const App: React.FC = () => {
     );
   }
 
-  if (cloudEnabled && !session) {
+  // 2) Sem conexão configurada: NÃO abre o sistema (nunca mostra dados locais sem login)
+  if (!cloudEnabled) {
+    return <ConfigRequiredScreen />;
+  }
+
+  // 3) Sem login: só a tela de login
+  if (!session) {
     return <LoginScreen />;
   }
 
-  if (cloudEnabled && needsMfa) {
+  // 4) Não foi possível verificar o nível de segurança: bloqueia
+  if (aalFailed) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 text-center gap-3">
+        <p className="text-sm text-slate-300">Não foi possível verificar sua segurança. Verifique a internet.</p>
+        <div className="flex gap-2">
+          <button onClick={recheckAal} className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm">
+            Tentar de novo
+          </button>
+          <button onClick={signOut} className="px-4 py-2 rounded-lg bg-slate-800 text-slate-300 text-sm">
+            Sair
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // 5) Tem 2FA ativo: pede o código
+  if (needsMfa) {
     return <MfaChallengeScreen onVerified={recheckAal} onSignOut={signOut} />;
   }
 
-  return (
-    <AppContent
-      onSignOut={cloudEnabled ? signOut : undefined}
-      userEmail={session?.user.email}
-    />
-  );
+  // 6) Ainda não tem 2FA: obriga a ativar
+  if (REQUIRE_MFA && needsEnroll) {
+    return <SecurityModal forced onClose={() => {}} onDone={recheckAal} onSignOut={signOut} />;
+  }
+
+  // 7) Tudo certo: abre o sistema
+  return <AppContent onSignOut={signOut} userEmail={session.user.email} />;
 };
 
 export default App;

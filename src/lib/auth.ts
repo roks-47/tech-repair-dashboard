@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { getSupabase } from './supabase';
 
@@ -30,6 +30,20 @@ export function useAuthSession() {
   const supabase = getSupabase();
   const [session, setSession] = useState<Session | null>(null);
   const [checking, setChecking] = useState<boolean>(!!supabase);
+  const [needsMfa, setNeedsMfa] = useState(false);
+  const [aalReady, setAalReady] = useState(true);
+  const hadSession = useRef(false);
+
+  // Confere se o usuário tem 2FA ativo e ainda não digitou o código nesta sessão
+  const checkAal = async () => {
+    if (!supabase) {
+      setAalReady(true);
+      return;
+    }
+    const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+    setNeedsMfa(!!data && data.nextLevel === 'aal2' && data.currentLevel !== 'aal2');
+    setAalReady(true);
+  };
 
   useEffect(() => {
     if (!supabase) {
@@ -38,14 +52,30 @@ export function useAuthSession() {
     }
     let active = true;
 
-    supabase.auth.getSession().then(({ data }) => {
+    supabase.auth.getSession().then(async ({ data }) => {
       if (!active) return;
       setSession(data.session);
-      setChecking(false);
+      hadSession.current = !!data.session;
+      if (data.session) await checkAal();
+      if (active) setChecking(false);
     });
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
       setSession(newSession);
+      if (!newSession) {
+        hadSession.current = false;
+        setNeedsMfa(false);
+        setAalReady(true);
+        return;
+      }
+      if (!hadSession.current) {
+        hadSession.current = true;
+        setAalReady(false);
+      }
+      // não chamar a Supabase direto dentro deste callback
+      setTimeout(() => {
+        checkAal();
+      }, 0);
     });
 
     return () => {
@@ -59,8 +89,50 @@ export function useAuthSession() {
     cloudEnabled: !!supabase,
     session,
     checking,
+    needsMfa,
+    aalReady,
+    recheckAal: checkAal,
     signOut: async () => {
       await supabase?.auth.signOut();
     },
   };
+}
+
+/**
+ * Desconecta automaticamente após X minutos sem uso (mouse, teclado, toque ou rolagem).
+ * Também confere ao voltar para a aba/aparelho, caso o celular tenha ficado bloqueado.
+ */
+export function useIdleSignOut(enabled: boolean, onIdle: () => void, minutes = 30) {
+  const lastActivity = useRef<number>(Date.now());
+  const onIdleRef = useRef(onIdle);
+  onIdleRef.current = onIdle;
+
+  useEffect(() => {
+    if (!enabled) return;
+    const limit = minutes * 60 * 1000;
+    lastActivity.current = Date.now();
+
+    const markActive = () => {
+      lastActivity.current = Date.now();
+    };
+    const check = () => {
+      if (Date.now() - lastActivity.current >= limit) {
+        onIdleRef.current();
+      }
+    };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') check();
+    };
+
+    const events = ['mousemove', 'keydown', 'click', 'touchstart', 'scroll'];
+    events.forEach((e) => window.addEventListener(e, markActive, { passive: true }));
+    document.addEventListener('visibilitychange', onVisible);
+    const interval = setInterval(check, 30000);
+
+    return () => {
+      events.forEach((e) => window.removeEventListener(e, markActive));
+      document.removeEventListener('visibilitychange', onVisible);
+      clearInterval(interval);
+    };
+  }, [enabled, minutes]);
 }

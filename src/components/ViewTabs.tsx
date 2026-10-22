@@ -1,7 +1,7 @@
 import React from 'react';
-import { ClipboardList, History as HistoryIcon, Package, LogOut, ShieldCheck } from 'lucide-react';
+import { ClipboardList, History as HistoryIcon, Package, Smartphone, LogOut, ShieldCheck } from 'lucide-react';
 
-export type AppView = 'orders' | 'history' | 'parts';
+export type AppView = 'orders' | 'history' | 'parts' | 'resale';
 
 interface ViewTabsProps {
   view: AppView;
@@ -15,6 +15,7 @@ const TABS: { id: AppView; label: string; icon: React.ReactNode }[] = [
   { id: 'orders', label: 'Ordens', icon: <ClipboardList className="w-4 h-4" /> },
   { id: 'history', label: 'Histórico', icon: <HistoryIcon className="w-4 h-4" /> },
   { id: 'parts', label: 'Peças', icon: <Package className="w-4 h-4" /> },
+  { id: 'resale', label: 'Revenda', icon: <Smartphone className="w-4 h-4" /> },
 ];
 
 const sideBtn =

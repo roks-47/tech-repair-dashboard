@@ -30,6 +30,7 @@ import { PinModal } from './components/PinModal';
 import { ViewTabs, type AppView } from './components/ViewTabs';
 import { HistoryPage } from './components/HistoryPage';
 import { PartsPage } from './components/PartsPage';
+import { ResalePage } from './components/ResalePage';
 import { LoginScreen } from './components/LoginScreen';
 import { MfaChallengeScreen } from './components/MfaChallengeScreen';
 import { SecurityModal } from './components/SecurityModal';
@@ -392,6 +393,8 @@ const AppContent: React.FC<AppContentProps> = ({ onSignOut, userEmail }) => {
       )}
 
       {view === 'parts' && <PartsPage />}
+
+      {view === 'resale' && <ResalePage />}
 
       {/* Main Container */}
       {view === 'orders' && (

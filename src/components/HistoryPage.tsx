@@ -3,6 +3,7 @@ import { Search, X, Calendar, User, Smartphone, Gamepad2, Wrench, Inbox, ShieldC
 import type { Order } from '../types';
 import { formatCurrency, formatPhone } from '../utils/formatters';
 import { getDeliveryDate, getWarranty, formatDay, WARRANTY_DAYS } from '../lib/warranty';
+import { MonthlyReports } from './MonthlyReports';
 
 interface HistoryPageProps {
   orders: Order[];
@@ -11,7 +12,7 @@ interface HistoryPageProps {
 
 export const HistoryPage: React.FC<HistoryPageProps> = ({ orders, onViewDetails }) => {
   const [query, setQuery] = useState('');
-  const [tab, setTab] = useState<'finished' | 'cancelled'>('finished');
+  const [tab, setTab] = useState<'monthly' | 'finished' | 'cancelled'>('monthly');
   const [warrantyFilter, setWarrantyFilter] = useState<'all' | 'active' | 'expired'>('all');
 
   const countFinished = useMemo(() => orders.filter((o) => o.status === 'entregue').length, [orders]);
@@ -50,14 +51,28 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({ orders, onViewDetails 
     <main className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-5 sm:py-7 flex-1 w-full">
       <div className="flex items-center gap-2 mb-4">
         <h2 className="text-sm sm:text-base font-bold text-slate-200">
-          {tab === 'finished' ? 'Histórico de serviços finalizados' : 'Ordens canceladas'}
+          {tab === 'monthly'
+            ? 'Resumo mensal'
+            : tab === 'finished'
+            ? 'Histórico de serviços finalizados'
+            : 'Ordens canceladas'}
         </h2>
-        <span className="text-xs text-slate-400 bg-slate-800 px-2 py-0.5 rounded-full font-mono">
-          {filtered.length}
-        </span>
+        {tab !== 'monthly' && (
+          <span className="text-xs text-slate-400 bg-slate-800 px-2 py-0.5 rounded-full font-mono">
+            {filtered.length}
+          </span>
+        )}
       </div>
 
-      <div className="flex bg-slate-900/90 p-1 rounded-xl border border-slate-800 w-fit mb-4">
+      <div className="flex bg-slate-900/90 p-1 rounded-xl border border-slate-800 w-fit mb-4 overflow-x-auto">
+        <button
+          onClick={() => setTab('monthly')}
+          className={`px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition-all whitespace-nowrap ${
+            tab === 'monthly' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+          }`}
+        >
+          Resumo mensal
+        </button>
         <button
           onClick={() => setTab('finished')}
           className={`px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition-all ${
@@ -76,6 +91,10 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({ orders, onViewDetails 
         </button>
       </div>
 
+      {tab === 'monthly' ? (
+        <MonthlyReports orders={orders} onViewDetails={onViewDetails} />
+      ) : (
+      <>
       {tab === 'finished' && (
         <div className="flex flex-wrap items-center gap-2 mb-4">
           <span className="text-[11px] text-slate-500">Garantia de {WARRANTY_DAYS} dias:</span>
@@ -205,6 +224,8 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({ orders, onViewDetails 
             );
           })}
         </div>
+      )}
+      </>
       )}
     </main>
   );
